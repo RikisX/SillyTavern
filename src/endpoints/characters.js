@@ -671,7 +671,7 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
     const pngName = preservedFileName || getPngName(jsonData.name, request.user.directories);
 
     if (jsonData.spec !== undefined) {
-        console.log(`Found a ${jsonData.spec} character file.`);
+        console.log(`Found a ${jsonData.spec} character file: ` + pngName);
         importRisuSprites(request.user.directories, jsonData);
         unsetFavFlag(jsonData);
         jsonData = readFromV2(jsonData);
@@ -681,7 +681,7 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
         fs.unlinkSync(uploadPath);
         return result ? pngName : '';
     } else if (jsonData.name !== undefined) {
-        console.log('Found a v1 character file.');
+        console.log(`Found a ${jsonData.spec} character file: ` + pngName);
 
         if (jsonData.creator_notes) {
             jsonData.creator_notes = jsonData.creator_notes.replace('Creator\'s notes go here.', '');
