@@ -724,6 +724,13 @@ const postSetupTasks = async function (v6Failed, v4Failed) {
     console.log(goToLog);
     console.log('\n' + getSeparator(plainGoToLog.length) + '\n');
 
+    const proxy = require("node-global-proxy").default;
+
+    /*proxy.setConfig("http://*.*.*.*:*"); 
+    proxy.start();*/
+    
+    console.log(color.green('Proxy initialized.'));    
+
     if (listen) {
         console.log('[::] or 0.0.0.0 means SillyTavern is listening on all network interfaces (Wi-Fi, LAN, localhost). If you want to limit it only to internal localhost ([::1] or 127.0.0.1), change the setting in config.yaml to "listen: false". Check "access.log" file in the SillyTavern directory if you want to inspect incoming connections.\n');
     }

@@ -42,7 +42,8 @@
         "ws": "^8.17.1",
         "yaml": "^2.3.4",
         "yargs": "^17.7.1",
-        "yauzl": "^2.10.0"
+        "yauzl": "^2.10.0",
+        "node-global-proxy": "*"
     },
     "engines": {
         "node": ">= 18"
