@@ -1,6 +1,5 @@
-import { chat_metadata, getCurrentChatId, saveSettingsDebounced, sendSystemMessage, system_message_types } from '../script.js';
+import { chat_metadata, getCurrentChatId, saveSettingsDebounced } from '../script.js';
 import { extension_settings, saveMetadataDebounced } from './extensions.js';
-import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { executeSlashCommandsWithOptions } from './slash-commands.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { SlashCommandAbortController } from './slash-commands/SlashCommandAbortController.js';
@@ -11,6 +10,7 @@ import { SlashCommandClosureResult } from './slash-commands/SlashCommandClosureR
 import { commonEnumProviders, enumIcons } from './slash-commands/SlashCommandCommonEnumsProvider.js';
 import { SlashCommandEnumValue, enumTypes } from './slash-commands/SlashCommandEnumValue.js';
 import { PARSER_FLAG, SlashCommandParser } from './slash-commands/SlashCommandParser.js';
+import { slashCommandReturnHelper } from './slash-commands/SlashCommandReturnHelper.js';
 import { SlashCommandScope } from './slash-commands/SlashCommandScope.js';
 import { isFalseBoolean, convertValueType, isTrueBoolean } from './utils.js';
 
@@ -46,6 +46,10 @@ function getLocalVariable(name, args = {}) {
 }
 
 function setLocalVariable(name, value, args = {}) {
+    if (!name) {
+        throw new Error('Variable name cannot be empty or undefined.');
+    }
+
     if (!chat_metadata.variables) {
         chat_metadata.variables = {};
     }
@@ -99,6 +103,10 @@ function getGlobalVariable(name, args = {}) {
 }
 
 function setGlobalVariable(name, value, args = {}) {
+    if (!name) {
+        throw new Error('Variable name cannot be empty or undefined.');
+    }
+
     if (args.index !== undefined) {
         try {
             let globalVariable = JSON.parse(extension_settings.variables.global[name] ?? 'null');
@@ -223,89 +231,58 @@ export function resolveVariable(name, scope = null) {
     return name;
 }
 
-export function replaceVariableMacros(input) {
-    const lines = input.split('\n');
-
-    for (let i = 0; i < lines.length; i++) {
-        let line = lines[i];
-
-        // Skip lines without macros
-        if (!line || !line.includes('{{')) {
-            continue;
-        }
-
-        // Replace {{getvar::name}} with the value of the variable name
-        line = line.replace(/{{getvar::([^}]+)}}/gi, (_, name) => {
-            name = name.trim();
-            return getLocalVariable(name);
-        });
-
+/**
+ * Returns built-in variable macros.
+ * @returns {import('./macros.js').Macro[]}
+ */
+export function getVariableMacros() {
+    return [
         // Replace {{setvar::name::value}} with empty string and set the variable name to value
-        line = line.replace(/{{setvar::([^:]+)::([^}]+)}}/gi, (_, name, value) => {
-            name = name.trim();
-            setLocalVariable(name, value);
-            return '';
-        });
-
+        { regex: /{{setvar::([^:]+)::([^}]+)}}/gi, replace: (_, name, value) => { setLocalVariable(name.trim(), value); return ''; } },
         // Replace {{addvar::name::value}} with empty string and add value to the variable value
-        line = line.replace(/{{addvar::([^:]+)::([^}]+)}}/gi, (_, name, value) => {
-            name = name.trim();
-            addLocalVariable(name, value);
-            return '';
-        });
-
+        { regex: /{{addvar::([^:]+)::([^}]+)}}/gi, replace: (_, name, value) => { addLocalVariable(name.trim(), value); return ''; } },
         // Replace {{incvar::name}} with empty string and increment the variable name by 1
-        line = line.replace(/{{incvar::([^}]+)}}/gi, (_, name) => {
-            name = name.trim();
-            return incrementLocalVariable(name);
-        });
-
+        { regex: /{{incvar::([^}]+)}}/gi, replace: (_, name) => incrementLocalVariable(name.trim()) },
         // Replace {{decvar::name}} with empty string and decrement the variable name by 1
-        line = line.replace(/{{decvar::([^}]+)}}/gi, (_, name) => {
-            name = name.trim();
-            return decrementLocalVariable(name);
-        });
-
-        // Replace {{getglobalvar::name}} with the value of the global variable name
-        line = line.replace(/{{getglobalvar::([^}]+)}}/gi, (_, name) => {
-            name = name.trim();
-            return getGlobalVariable(name);
-        });
-
+        { regex: /{{decvar::([^}]+)}}/gi, replace: (_, name) => decrementLocalVariable(name.trim()) },
+        // Replace {{getvar::name}} with the value of the variable name
+        { regex: /{{getvar::([^}]+)}}/gi, replace: (_, name) => getLocalVariable(name.trim()) },
         // Replace {{setglobalvar::name::value}} with empty string and set the global variable name to value
-        line = line.replace(/{{setglobalvar::([^:]+)::([^}]+)}}/gi, (_, name, value) => {
-            name = name.trim();
-            setGlobalVariable(name, value);
-            return '';
-        });
-
+        { regex: /{{setglobalvar::([^:]+)::([^}]+)}}/gi, replace: (_, name, value) => { setGlobalVariable(name.trim(), value); return ''; } },
         // Replace {{addglobalvar::name::value}} with empty string and add value to the global variable value
-        line = line.replace(/{{addglobalvar::([^:]+)::([^}]+)}}/gi, (_, name, value) => {
-            name = name.trim();
-            addGlobalVariable(name, value);
-            return '';
-        });
-
+        { regex: /{{addglobalvar::([^:]+)::([^}]+)}}/gi, replace: (_, name, value) => { addGlobalVariable(name.trim(), value); return ''; } },
         // Replace {{incglobalvar::name}} with empty string and increment the global variable name by 1
-        line = line.replace(/{{incglobalvar::([^}]+)}}/gi, (_, name) => {
-            name = name.trim();
-            return incrementGlobalVariable(name);
-        });
-
+        { regex: /{{incglobalvar::([^}]+)}}/gi, replace: (_, name) => incrementGlobalVariable(name.trim()) },
         // Replace {{decglobalvar::name}} with empty string and decrement the global variable name by 1
-        line = line.replace(/{{decglobalvar::([^}]+)}}/gi, (_, name) => {
-            name = name.trim();
-            return decrementGlobalVariable(name);
-        });
-
-        lines[i] = line;
-    }
-
-    return lines.join('\n');
+        { regex: /{{decglobalvar::([^}]+)}}/gi, replace: (_, name) => decrementGlobalVariable(name.trim()) },
+        // Replace {{getglobalvar::name}} with the value of the global variable name
+        { regex: /{{getglobalvar::([^}]+)}}/gi, replace: (_, name) => getGlobalVariable(name.trim()) },
+    ];
 }
 
 async function listVariablesCallback(args) {
-    const type = String(args?.format || '').toLowerCase().trim() || 'popup';
+    /** @type {import('./slash-commands/SlashCommandReturnHelper.js').SlashCommandReturnType} */
+    let returnType = args.return;
+
+    // Old legacy return type handling
+    if (args.format) {
+        toastr.warning(`Legacy argument 'format' with value '${args.format}' is deprecated. Please use 'return' instead. Routing to the correct return type...`, 'Deprecation warning');
+        const type = String(args?.format).toLowerCase().trim();
+        switch (type) {
+            case 'none':
+                returnType = 'none';
+                break;
+            case 'chat':
+                returnType = 'chat-html';
+                break;
+            case 'popup':
+            default:
+                returnType = 'popup-html';
+                break;
+        }
+    }
+
+    // Now the actual new return type handling
     const scope = String(args?.scope || '').toLowerCase().trim() || 'all';
     if (!chat_metadata.variables) {
         chat_metadata.variables = {};
@@ -317,35 +294,24 @@ async function listVariablesCallback(args) {
     const localVariables = includeLocalVariables ? Object.entries(chat_metadata.variables).map(([name, value]) => `${name}: ${value}`) : [];
     const globalVariables = includeGlobalVariables ? Object.entries(extension_settings.variables.global).map(([name, value]) => `${name}: ${value}`) : [];
 
+    const buildTextValue = (_) => {
+        const localVariablesString = localVariables.length > 0 ? localVariables.join('\n\n') : 'No local variables';
+        const globalVariablesString = globalVariables.length > 0 ? globalVariables.join('\n\n') : 'No global variables';
+        const chatName = getCurrentChatId();
+
+        const message = [
+            includeLocalVariables ? `### Local variables (${chatName}):\n${localVariablesString}` : '',
+            includeGlobalVariables ? `### Global variables:\n${globalVariablesString}` : '',
+        ].filter(x => x).join('\n\n');
+        return message;
+    };
+
     const jsonVariables = [
         ...Object.entries(chat_metadata.variables).map(x => ({ key: x[0], value: x[1], scope: 'local' })),
         ...Object.entries(extension_settings.variables.global).map(x => ({ key: x[0], value: x[1], scope: 'global' })),
     ];
 
-    const localVariablesString = localVariables.length > 0 ? localVariables.join('\n\n') : 'No local variables';
-    const globalVariablesString = globalVariables.length > 0 ? globalVariables.join('\n\n') : 'No global variables';
-    const chatName = getCurrentChatId();
-
-    const converter = new showdown.Converter();
-    const message = [
-        includeLocalVariables ? `### Local variables (${chatName}):\n${localVariablesString}` : '',
-        includeGlobalVariables ? `### Global variables:\n${globalVariablesString}` : '',
-    ].filter(x => x).join('\n\n');
-    const htmlMessage = DOMPurify.sanitize(converter.makeHtml(message));
-
-    switch (type) {
-        case 'none':
-            break;
-        case 'chat':
-            sendSystemMessage(system_message_types.GENERIC, htmlMessage);
-            break;
-        case 'popup':
-        default:
-            await callGenericPopup(htmlMessage, POPUP_TYPE.TEXT);
-            break;
-    }
-
-    return JSON.stringify(jsonVariables);
+    return await slashCommandReturnHelper.doReturn(returnType ?? 'popup-html', jsonVariables, { objectToStringFunc: buildTextValue });
 }
 
 /**
@@ -503,7 +469,8 @@ export function parseBooleanOperands(args) {
             return '';
         }
 
-        const operandNumber = Number(operand);
+        // parseFloat will return NaN for spaces.
+        const operandNumber = parseFloat(operand);
 
         if (!isNaN(operandNumber)) {
             return operandNumber;
@@ -669,8 +636,8 @@ function deleteGlobalVariable(name) {
 }
 
 /**
- * Parses a series of numeric values from a string.
- * @param {string} value A space-separated list of numeric values or variable names
+ * Parses a series of numeric values from a string or a string array.
+ * @param {string|string[]} value A space-separated list of numeric values or variable names
  * @param {SlashCommandScope} scope Scope
  * @returns {number[]} An array of numeric values
  */
@@ -679,11 +646,23 @@ function parseNumericSeries(value, scope = null) {
         return [value];
     }
 
-    const array = value
-        .split(' ')
-        .map(i => i.trim())
+    /** @type {(string|number)[]} */
+    let values = Array.isArray(value) ? value : value.split(' ');
+
+    // If an array of strings was provided as the only value, convert it to an array
+    if (values.length === 1 && typeof values[0] === 'string') {
+        if (values[0].startsWith('[')) {
+            // JSON-style array
+            values = convertValueType(values[0], 'array');
+        } else {
+            // Space-separated string
+            values = values[0].split(' ');
+        }
+    }
+
+    const array = values.map(i => typeof i === 'string' ? i.trim() : i)
         .filter(i => i !== '')
-        .map(i => isNaN(Number(i)) ? Number(resolveVariable(i, scope)) : Number(i))
+        .map(i => isNaN(Number(i)) ? Number(resolveVariable(String(i), scope)) : Number(i))
         .filter(i => !isNaN(i));
 
     return array;
@@ -703,7 +682,7 @@ function performOperation(value, operation, singleOperand = false, scope = null)
 
         const result = singleOperand ? operation(array[0]) : operation(array);
 
-        if (isNaN(result) || !isFinite(result)) {
+        if (isNaN(result)) {
             return 0;
         }
 
@@ -731,7 +710,7 @@ function maxValuesCallback(args, value) {
 }
 
 function subValuesCallback(args, value) {
-    return performOperation(value, (array) => array[0] - array[1], false, args._scope);
+    return performOperation(value, (array) => array.reduce((a, b) => a - b, array.shift() ?? 0), false, args._scope);
 }
 
 function divValuesCallback(args, value) {
@@ -817,6 +796,40 @@ function randValuesCallback(from, to, args) {
         return Math.floor(value);
     }
     return value;
+}
+
+function customSortComparitor(a, b) {
+    if (typeof a != typeof b) {
+        a = typeof a;
+        b = typeof b;
+    }
+    return a > b ? 1 : a < b ? -1 : 0;
+}
+
+function sortArrayObjectCallback(args, value) {
+    let parsedValue;
+    if (typeof value == 'string') {
+        try {
+            parsedValue = JSON.parse(value);
+        } catch {
+            // return the original input if it was invalid
+            return value;
+        }
+    } else {
+        parsedValue = value;
+    }
+    if (Array.isArray(parsedValue)) {
+        // always sort lists by value
+        parsedValue.sort(customSortComparitor);
+    } else if (typeof parsedValue == 'object') {
+        let keysort = args.keysort;
+        if (isFalseBoolean(keysort)) {
+            parsedValue = Object.keys(parsedValue).sort(function (a, b) { return customSortComparitor(parsedValue[a], parsedValue[b]); });
+        } else {
+            parsedValue = Object.keys(parsedValue).sort(customSortComparitor);
+        }
+    }
+    return JSON.stringify(parsedValue);
 }
 
 /**
@@ -910,7 +923,7 @@ export function registerVariableCommands() {
         name: 'listvar',
         callback: listVariablesCallback,
         aliases: ['listchatvar'],
-        helpString: 'List registered chat variables. Displays variables in a popup by default. Use the <code>format</code> argument to change the output format.',
+        helpString: 'List registered chat variables. Displays variables in a popup by default. Use the <code>return</code> argument to change the return type.',
         returns: 'JSON list of local variables',
         namedArgumentList: [
             SlashCommandNamedArgument.fromProps({
@@ -927,8 +940,17 @@ export function registerVariableCommands() {
                 ],
             }),
             SlashCommandNamedArgument.fromProps({
+                name: 'return',
+                description: 'The way how you want the return value to be provided',
+                typeList: [ARGUMENT_TYPE.STRING],
+                defaultValue: 'popup-html',
+                enumList: slashCommandReturnHelper.enumList({ allowPipe: false, allowObject: true, allowChat: true, allowPopup: true, allowTextVersion: false }),
+                forceEnum: true,
+            }),
+            // TODO remove some day
+            SlashCommandNamedArgument.fromProps({
                 name: 'format',
-                description: 'output format',
+                description: '!!! DEPRECATED - use "return" instead !!! output format',
                 typeList: [ARGUMENT_TYPE.STRING],
                 isRequired: true,
                 forceEnum: true,
@@ -1595,36 +1617,15 @@ export function registerVariableCommands() {
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'add',
-        callback: (args, /**@type {string[]}*/value) => addValuesCallback(args, value.join(' ')),
+        callback: (args, value) => addValuesCallback(args, value),
         returns: 'sum of the provided values',
         unnamedArgumentList: [
             SlashCommandArgument.fromProps({
                 description: 'values to sum',
-                typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
+                typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME, ARGUMENT_TYPE.LIST],
                 isRequired: true,
                 acceptsMultiple: true,
-                enumProvider: (executor, scope) => {
-                    const vars = commonEnumProviders.variables('all')(executor, scope);
-                    vars.push(
-                        new SlashCommandEnumValue(
-                            'any variable name',
-                            null,
-                            enumTypes.variable,
-                            enumIcons.variable,
-                            (input) => /^\w*$/.test(input),
-                            (input) => input,
-                        ),
-                        new SlashCommandEnumValue(
-                            'any number',
-                            null,
-                            enumTypes.number,
-                            enumIcons.number,
-                            (input) => input == '' || !Number.isNaN(Number(input)),
-                            (input) => input,
-                        ),
-                    );
-                    return vars;
-                },
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
@@ -1632,13 +1633,18 @@ export function registerVariableCommands() {
         helpString: `
             <div>
                 Performs an addition of the set of values and passes the result down the pipe.
-                Can use variable names.
+            </div>
+            <div>
+                Can use variable names, or a JSON array consisting of numbers and variables (with quotes).
             </div>
             <div>
                 <strong>Example:</strong>
                 <ul>
                     <li>
                         <pre><code class="language-stscript">/add 10 i 30 j</code></pre>
+                    </li>
+                    <li>
+                        <pre><code class="language-stscript">/add ["count", 15, 2, "i"]</code></pre>
                     </li>
                 </ul>
             </div>
@@ -1651,22 +1657,29 @@ export function registerVariableCommands() {
         unnamedArgumentList: [
             SlashCommandArgument.fromProps({
                 description: 'values to multiply',
-                typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
+                typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME, ARGUMENT_TYPE.LIST],
                 isRequired: true,
                 acceptsMultiple: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
+        splitUnnamedArgument: true,
         helpString: `
             <div>
-                Performs a multiplication of the set of values and passes the result down the pipe. Can use variable names.
+                Performs a multiplication of the set of values and passes the result down the pipe.
+            </div>
+            <div>
+                Can use variable names, or a JSON array consisting of numbers and variables (with quotes).
             </div>
             <div>
                 <strong>Examples:</strong>
                 <ul>
                     <li>
                         <pre><code class="language-stscript">/mul 10 i 30 j</code></pre>
+                    </li>
+                    <li>
+                        <pre><code class="language-stscript">/mul ["count", 15, 2, "i"]</code></pre>
                     </li>
                 </ul>
             </div>
@@ -1679,22 +1692,29 @@ export function registerVariableCommands() {
         unnamedArgumentList: [
             SlashCommandArgument.fromProps({
                 description: 'values to find the max',
-                typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
+                typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME, ARGUMENT_TYPE.LIST],
                 isRequired: true,
                 acceptsMultiple: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
+        splitUnnamedArgument: true,
         helpString: `
             <div>
-                Returns the maximum value of the set of values and passes the result down the pipe. Can use variable names.
+                Returns the maximum value of the set of values and passes the result down the pipe.
+            </div>
+            <div>
+                Can use variable names, or a JSON array consisting of numbers and variables (with quotes).
             </div>
             <div>
                 <strong>Examples:</strong>
                 <ul>
                     <li>
                         <pre><code class="language-stscript">/max 10 i 30 j</code></pre>
+                    </li>
+                    <li>
+                        <pre><code class="language-stscript">/max ["count", 15, 2, "i"]</code></pre>
                     </li>
                 </ul>
             </div>
@@ -1707,23 +1727,29 @@ export function registerVariableCommands() {
         unnamedArgumentList: [
             SlashCommandArgument.fromProps({
                 description: 'values to find the min',
-                typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
+                typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME, ARGUMENT_TYPE.LIST],
                 isRequired: true,
                 acceptsMultiple: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
+        splitUnnamedArgument: true,
         helpString: `
             <div>
                 Returns the minimum value of the set of values and passes the result down the pipe.
-                Can use variable names.
+            </div>
+            <div>
+                Can use variable names, or a JSON array consisting of numbers and variables (with quotes).
             </div>
             <div>
                 <strong>Example:</strong>
                 <ul>
                     <li>
                         <pre><code class="language-stscript">/min 10 i 30 j</code></pre>
+                    </li>
+                    <li>
+                        <pre><code class="language-stscript">/min ["count", 15, 2, "i"]</code></pre>
                     </li>
                 </ul>
             </div>
@@ -1735,24 +1761,30 @@ export function registerVariableCommands() {
         returns: 'difference of the provided values',
         unnamedArgumentList: [
             SlashCommandArgument.fromProps({
-                description: 'values to find the difference',
-                typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
+                description: 'values to subtract, starting form the first provided value',
+                typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME, ARGUMENT_TYPE.LIST],
                 isRequired: true,
                 acceptsMultiple: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
+        splitUnnamedArgument: true,
         helpString: `
             <div>
                 Performs a subtraction of the set of values and passes the result down the pipe.
-                Can use variable names.
+            </div>
+            <div>
+                Can use variable names, or a JSON array consisting of numbers and variables (with quotes).
             </div>
             <div>
                 <strong>Example:</strong>
                 <ul>
                     <li>
                         <pre><code class="language-stscript">/sub i 5</code></pre>
+                    </li>
+                    <li>
+                        <pre><code class="language-stscript">/sub ["count", 4, "i"]</code></pre>
                     </li>
                 </ul>
             </div>
@@ -1767,17 +1799,18 @@ export function registerVariableCommands() {
                 description: 'dividend',
                 typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
                 isRequired: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
             SlashCommandArgument.fromProps({
                 description: 'divisor',
                 typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
                 isRequired: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
+        splitUnnamedArgument: true,
         helpString: `
             <div>
                 Performs a division of two values and passes the result down the pipe.
@@ -1802,17 +1835,18 @@ export function registerVariableCommands() {
                 description: 'dividend',
                 typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
                 isRequired: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
             SlashCommandArgument.fromProps({
                 description: 'divisor',
                 typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
                 isRequired: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
+        splitUnnamedArgument: true,
         helpString: `
             <div>
                 Performs a modulo operation of two values and passes the result down the pipe.
@@ -1837,17 +1871,18 @@ export function registerVariableCommands() {
                 description: 'base',
                 typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
                 isRequired: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
             SlashCommandArgument.fromProps({
                 description: 'exponent',
                 typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
                 isRequired: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
+        splitUnnamedArgument: true,
         helpString: `
             <div>
                 Performs a power operation of two values and passes the result down the pipe.
@@ -1872,7 +1907,7 @@ export function registerVariableCommands() {
                 description: 'value',
                 typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
                 isRequired: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
@@ -1900,7 +1935,7 @@ export function registerVariableCommands() {
                 description: 'value',
                 typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
                 isRequired: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
@@ -1929,7 +1964,7 @@ export function registerVariableCommands() {
                 description: 'value',
                 typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
                 isRequired: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
@@ -1957,7 +1992,7 @@ export function registerVariableCommands() {
                 description: 'value',
                 typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
                 isRequired: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
@@ -1985,7 +2020,7 @@ export function registerVariableCommands() {
                 description: 'value',
                 typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
                 isRequired: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
@@ -2013,7 +2048,7 @@ export function registerVariableCommands() {
                 description: 'value',
                 typeList: [ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.VARIABLE_NAME],
                 isRequired: true,
-                enumProvider: commonEnumProviders.variables('all'),
+                enumProvider: commonEnumProviders.numbersAndVariables,
                 forceEnum: false,
             }),
         ],
@@ -2065,6 +2100,52 @@ export function registerVariableCommands() {
                 <ul>
                     <li>
                         <pre><code class="language-stscript">/len Lorem ipsum | /echo</code></pre>
+                    </li>
+                </ul>
+            </div>
+        `,
+    }));
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'sort',
+        callback: sortArrayObjectCallback,
+        returns: 'the sorted list or dictionary keys',
+        namedArgumentList: [
+            SlashCommandNamedArgument.fromProps({
+                name: 'keysort',
+                description: 'whether to sort by key or value; ignored for lists',
+                typeList: [ARGUMENT_TYPE.BOOLEAN],
+                enumList: ['true', 'false'],
+                defaultValue: 'true',
+            }),
+        ],
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: 'value',
+                typeList: [ARGUMENT_TYPE.STRING, ARGUMENT_TYPE.NUMBER, ARGUMENT_TYPE.LIST, ARGUMENT_TYPE.DICTIONARY],
+                isRequired: true,
+                forceEnum: false,
+            }),
+        ],
+        helpString: `
+            <div>
+                Sorts a list or dictionary in ascending order and passes the result down the pipe.
+                <ul>
+                    <li>
+                        For lists, returns the list sorted by value.
+                    </li>
+                    <li>
+                        For dictionaries, returns the ordered list of keys after sorting. Setting keysort=false means keys are sorted by associated value.
+                    </li>
+                </ul>
+            </div>
+            <div>
+                <strong>Examples:</strong>
+                <ul>
+                    <li>
+                        <pre><code class="language-stscript">/sort [5,3,4,1,2] | /echo</code></pre>
+                    </li>
+                    <li>
+                        <pre><code class="language-stscript">/sort keysort=false {"a": 1, "d": 3, "c": 2, "b": 5} | /echo</code></pre>
                     </li>
                 </ul>
             </div>

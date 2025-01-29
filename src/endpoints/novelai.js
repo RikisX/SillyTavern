@@ -1,9 +1,12 @@
-const fetch = require('node-fetch').default;
-const express = require('express');
-const util = require('util');
-const { readSecret, SECRET_KEYS } = require('./secrets');
-const { readAllChunks, extractFileFromZipBuffer, forwardFetchResponse } = require('../util');
-const { jsonParser } = require('../express-common');
+import util from 'node:util';
+import { Buffer } from 'node:buffer';
+
+import fetch from 'node-fetch';
+import express from 'express';
+
+import { readSecret, SECRET_KEYS } from './secrets.js';
+import { readAllChunks, extractFileFromZipBuffer, forwardFetchResponse } from '../util.js';
+import { jsonParser } from '../express-common.js';
 
 const API_NOVELAI = 'https://api.novelai.net';
 const TEXT_NOVELAI = 'https://text.novelai.net';
@@ -51,7 +54,7 @@ const eratoRepPenWhitelist = [
     6, 1, 11, 13, 25, 198, 12, 9, 8, 279, 264, 459, 323, 477, 539, 912, 374, 574, 1051, 1550, 1587, 4536, 5828, 15058,
     3287, 3250, 1461, 1077, 813, 11074, 872, 1202, 1436, 7846, 1288, 13434, 1053, 8434, 617, 9167, 1047, 19117, 706,
     12775, 649, 4250, 527, 7784, 690, 2834, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 1210, 1359, 608, 220, 596, 956,
-    3077, 44886, 4265, 3358, 2351, 2846, 311, 389, 315, 304, 520, 505, 430
+    3077, 44886, 4265, 3358, 2351, 2846, 311, 389, 315, 304, 520, 505, 430,
 ];
 
 // Ban the dinkus and asterism
@@ -110,7 +113,7 @@ function getRepPenaltyWhitelist(model) {
     return null;
 }
 
-const router = express.Router();
+export const router = express.Router();
 
 router.post('/status', jsonParser, async function (req, res) {
     if (!req.body) return res.sendStatus(400);
@@ -249,7 +252,7 @@ router.post('/generate', jsonParser, async function (req, res) {
     try {
         const baseURL = (req.body.model.includes('kayra') || req.body.model.includes('erato')) ? TEXT_NOVELAI : API_NOVELAI;
         const url = req.body.streaming ? `${baseURL}/ai/generate-stream` : `${baseURL}/ai/generate`;
-        const response = await fetch(url, { method: 'POST', timeout: 0, ...args });
+        const response = await fetch(url, { method: 'POST', ...args });
 
         if (req.body.streaming) {
             // Pipe remote SSE stream to Express response
@@ -271,6 +274,7 @@ router.post('/generate', jsonParser, async function (req, res) {
                 return res.status(response.status).send({ error: { message } });
             }
 
+            /** @type {any} */
             const data = await response.json();
             console.log('NovelAI Output', data?.output);
             return res.send(data);
@@ -303,15 +307,18 @@ router.post('/generate-image', jsonParser, async (request, response) => {
             },
             body: JSON.stringify({
                 action: 'generate',
-                input: request.body.prompt,
+                input: request.body.prompt ?? '',
                 model: request.body.model ?? 'nai-diffusion',
                 parameters: {
+                    params_version: 3,
+                    prefer_brownian: true,
                     negative_prompt: request.body.negative_prompt ?? '',
                     height: request.body.height ?? 512,
                     width: request.body.width ?? 512,
                     scale: request.body.scale ?? 9,
                     seed: request.body.seed >= 0 ? request.body.seed : Math.floor(Math.random() * 9999999999),
                     sampler: request.body.sampler ?? 'k_dpmpp_2m',
+                    noise_schedule: request.body.scheduler ?? 'karras',
                     steps: request.body.steps ?? 28,
                     n_samples: 1,
                     // NAI handholding for prompts
@@ -319,11 +326,32 @@ router.post('/generate-image', jsonParser, async (request, response) => {
                     qualityToggle: false,
                     add_original_image: false,
                     controlnet_strength: 1,
+                    deliberate_euler_ancestral_bug: false,
                     dynamic_thresholding: request.body.decrisper ?? false,
                     legacy: false,
+                    legacy_v3_extend: false,
                     sm: request.body.sm ?? false,
                     sm_dyn: request.body.sm_dyn ?? false,
                     uncond_scale: 1,
+                    use_coords: false,
+                    characterPrompts: [],
+                    reference_image_multiple: [],
+                    reference_information_extracted_multiple: [],
+                    reference_strength_multiple: [],
+                    v4_negative_prompt: {
+                        caption: {
+                            base_caption: request.body.negative_prompt ?? '',
+                            char_captions: [],
+                        },
+                    },
+                    v4_prompt: {
+                        caption: {
+                            base_caption: request.body.prompt ?? '',
+                            char_captions: [],
+                        },
+                        use_coords: false,
+                        use_order: true,
+                    },
                 },
             }),
         });
@@ -413,7 +441,6 @@ router.post('/generate-voice', jsonParser, async (request, response) => {
                 'Authorization': `Bearer ${token}`,
                 'Accept': 'audio/mpeg',
             },
-            timeout: 0,
         });
 
         if (!result.ok) {
@@ -423,7 +450,7 @@ router.post('/generate-voice', jsonParser, async (request, response) => {
         }
 
         const chunks = await readAllChunks(result.body);
-        const buffer = Buffer.concat(chunks);
+        const buffer = Buffer.concat(chunks.map(chunk => new Uint8Array(chunk)));
         response.setHeader('Content-Type', 'audio/mpeg');
         return response.send(buffer);
     }
@@ -432,5 +459,3 @@ router.post('/generate-voice', jsonParser, async (request, response) => {
         return response.sendStatus(500);
     }
 });
-
-module.exports = { router };
