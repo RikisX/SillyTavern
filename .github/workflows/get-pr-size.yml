@@ -37,3 +37,10 @@ jobs:
           Try to avoid addressing multiple issues in a single PR, and
           in the future consider breaking large tasks down into smaller steps.
           This it to make reviewing, testing, reverting and general quality management easier.
+    - name: Archive npm failure logs
+      uses: actions/upload-artifact@v2
+      if: failure()
+      with:
+        name: npm-logs
+        path: ~/.npm/_logs
+          
